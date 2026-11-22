@@ -1,90 +1,193 @@
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterEach, test } from 'node:test';
-import { ArgoCDClient } from './client.js';
+import { test, mock } from 'node:test';
+import { ArgoCDClient, summarizeApplication } from './client.js';
+import type { V1alpha1Application } from '../types/argocd-types.js';
 
-// Hermetic: a throwaway local HTTP server stands in for ArgoCD.
-let server: Server | undefined;
+const BASE_URL = 'https://argo.example.com';
 
-const startArgoCD = async (
-  status: number,
-  body: unknown
-): Promise<{ client: ArgoCDClient; requests: string[] }> => {
-  const requests: string[] = [];
-  server = createServer((req, res) => {
-    requests.push(req.url ?? '');
-    res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(body));
+// Records every request URL and answers each with the same list body.
+const installFetch = (items: V1alpha1Application[]) => {
+  const requests: URL[] = [];
+  mock.method(globalThis, 'fetch', async (url: unknown) => {
+    requests.push(new URL(String(url)));
+    return new Response(JSON.stringify({ items, metadata: { resourceVersion: '42' } }), {
+      status: 200
+    });
   });
-  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
-  return { client: new ArgoCDClient(`http://127.0.0.1:${port}`, 'token'), requests };
+  return requests;
 };
 
-afterEach(async () => {
-  if (server) {
-    await new Promise((resolve) => server!.close(resolve));
-    server = undefined;
-  }
+const HELM_VALUES = 'replicaCount: 3\nimage:\n  tag: 1.2.3\n'.repeat(50);
+
+// Mirrors what the API returns for a Helm application: the values block appears
+// in spec.source and again in status.sync.comparedTo, alongside the fields the
+// list response is expected to drop.
+const application = (name: string, overrides: Partial<V1alpha1Application> = {}) =>
+  ({
+    metadata: {
+      name,
+      namespace: 'argocd',
+      labels: { team: 'payments' },
+      creationTimestamp: '2026-01-01T00:00:00Z',
+      managedFields: [{ manager: 'argocd-controller', operation: 'Update' }]
+    },
+    spec: {
+      project: 'default',
+      source: {
+        repoURL: 'https://git.example.com/charts.git',
+        path: `apps/${name}`,
+        targetRevision: 'main',
+        helm: { values: HELM_VALUES, valuesObject: { replicaCount: 3 } }
+      },
+      destination: { server: 'https://kubernetes.default.svc', namespace: name },
+      syncPolicy: { automated: { prune: true } }
+    },
+    status: {
+      sync: {
+        status: 'Synced',
+        revision: 'abc123',
+        comparedTo: {
+          source: { repoURL: 'https://git.example.com/charts.git', helm: { values: HELM_VALUES } }
+        }
+      },
+      health: { status: 'Healthy' },
+      operationState: { phase: 'Succeeded', message: 'successfully synced' },
+      history: [{ revision: 'abc123' }, { revision: 'def456' }],
+      resources: [{ kind: 'Deployment', name }],
+      summary: { images: ['registry.example.com/app:1.2.3'] }
+    },
+    ...overrides
+  }) as V1alpha1Application;
+
+const FIXTURE = [
+  application('payments-api'),
+  application('payments-worker'),
+  application('argocd-mcp', {
+    spec: {
+      project: 'platform',
+      sources: [
+        { repoURL: 'https://git.example.com/mcp.git', path: 'deploy', targetRevision: 'v1' },
+        { repoURL: 'https://git.example.com/values.git', ref: 'values' }
+      ],
+      destination: { name: 'in-cluster', namespace: 'argocd' }
+    },
+    status: { sync: { status: 'OutOfSync', revisions: ['111aaa', '222bbb'] } }
+  })
+];
+
+test('search is applied locally and never forwarded to the API', async (t) => {
+  const requests = installFetch(FIXTURE);
+  t.after(() => mock.restoreAll());
+  const client = new ArgoCDClient(BASE_URL, 'tok');
+
+  const result = await client.listApplications({ search: 'PAYMENTS' });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].pathname, '/api/v1/applications');
+  assert.equal(requests[0].search, '');
+  assert.deepEqual(
+    result.items.map((a) => a.name),
+    ['payments-api', 'payments-worker']
+  );
+  assert.equal(result.metadata.totalItems, 2);
 });
 
-test('getApplicationSyncWindows returns windows and canSync, sending namespace and project', async () => {
-  const response = {
-    activeWindows: [{ kind: 'deny', schedule: '0 2 * * *', duration: '1h' }],
-    assignedWindows: [{ kind: 'deny', schedule: '0 2 * * *', duration: '1h' }],
-    canSync: false
-  };
-  const { client, requests } = await startArgoCD(200, response);
+test('list items are summaries without Helm values or per-resource detail', async (t) => {
+  installFetch(FIXTURE);
+  t.after(() => mock.restoreAll());
+  const client = new ArgoCDClient(BASE_URL, 'tok');
 
-  const result = await client.getApplicationSyncWindows('guestbook', {
-    appNamespace: 'argocd',
-    project: 'default'
+  const result = await client.listApplications({ search: 'payments-api' });
+  const [item] = result.items;
+
+  assert.deepEqual(item, {
+    name: 'payments-api',
+    namespace: 'argocd',
+    project: 'default',
+    labels: { team: 'payments' },
+    createdAt: '2026-01-01T00:00:00Z',
+    source: {
+      repoURL: 'https://git.example.com/charts.git',
+      path: 'apps/payments-api',
+      chart: undefined,
+      targetRevision: 'main',
+      ref: undefined
+    },
+    sources: undefined,
+    destination: { server: 'https://kubernetes.default.svc', namespace: 'payments-api' },
+    sync: { status: 'Synced', revision: 'abc123', revisions: undefined },
+    health: { status: 'Healthy', message: undefined },
+    operationPhase: 'Succeeded',
+    autoSync: true
   });
 
-  assert.deepEqual(result, response);
-  assert.equal(
-    requests[0],
-    '/api/v1/applications/guestbook/syncwindows?appNamespace=argocd&project=default'
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('replicaCount'), false);
+  assert.equal(serialized.includes('comparedTo'), false);
+  assert.equal(serialized.includes('managedFields'), false);
+  assert.equal(serialized.includes('history'), false);
+  assert.ok(serialized.length < 1000, `summary should be small, got ${serialized.length} bytes`);
+});
+
+test('multi-source applications keep every source', () => {
+  const summary = summarizeApplication(FIXTURE[2]);
+
+  assert.equal(summary.source, undefined);
+  assert.equal(summary.sources?.length, 2);
+  assert.equal(summary.sources?.[1].ref, 'values');
+  assert.deepEqual(summary.sync, {
+    status: 'OutOfSync',
+    revision: undefined,
+    revisions: ['111aaa', '222bbb']
+  });
+  assert.equal(summary.autoSync, false);
+});
+
+test('pagination counts reflect the filtered set', async (t) => {
+  installFetch(FIXTURE);
+  t.after(() => mock.restoreAll());
+  const client = new ArgoCDClient(BASE_URL, 'tok');
+
+  const first = await client.listApplications({ search: 'payments', limit: 1 });
+  assert.deepEqual(
+    first.items.map((a) => a.name),
+    ['payments-api']
   );
+  assert.deepEqual(first.metadata, {
+    resourceVersion: '42',
+    totalItems: 2,
+    returnedItems: 1,
+    offset: 0,
+    hasMore: true
+  });
+
+  const second = await client.listApplications({ search: 'payments', limit: 1, offset: 1 });
+  assert.deepEqual(
+    second.items.map((a) => a.name),
+    ['payments-worker']
+  );
+  assert.equal(second.metadata.hasMore, false);
 });
 
-test('getApplicationSyncWindows normalizes an omitted-fields response to empty lists', async () => {
-  // ArgoCD drops empty fields, so "no windows" arrives as an object without the arrays.
-  const { client } = await startArgoCD(200, { canSync: true });
+test('an offset past the end returns an empty page', async (t) => {
+  installFetch(FIXTURE);
+  t.after(() => mock.restoreAll());
+  const client = new ArgoCDClient(BASE_URL, 'tok');
 
-  const result = await client.getApplicationSyncWindows('guestbook');
+  const result = await client.listApplications({ offset: 10 });
 
-  assert.deepEqual(result, { activeWindows: [], assignedWindows: [], canSync: true });
+  assert.deepEqual(result.items, []);
+  assert.equal(result.metadata.totalItems, 3);
+  assert.equal(result.metadata.hasMore, false);
 });
 
-test('getAppProjectSyncWindows returns windows', async () => {
-  const windows = [{ kind: 'allow', schedule: '0 8 * * 1-5', duration: '8h' }];
-  const { client, requests } = await startArgoCD(200, { windows });
+test('an empty list body is handled', async (t) => {
+  mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({}), { status: 200 }));
+  t.after(() => mock.restoreAll());
+  const client = new ArgoCDClient(BASE_URL, 'tok');
 
-  const result = await client.getAppProjectSyncWindows('default');
+  const result = await client.listApplications();
 
-  assert.deepEqual(result, { windows });
-  assert.equal(requests[0], '/api/v1/projects/default/syncwindows');
-});
-
-test('getAppProjectSyncWindows normalizes an empty response to an empty list', async () => {
-  const { client } = await startArgoCD(200, {});
-
-  assert.deepEqual(await client.getAppProjectSyncWindows('default'), { windows: [] });
-});
-
-test('sync window reads fail on an error status instead of reporting no windows', async () => {
-  // An unreadable state must never look like "no windows" (and canSync must not default).
-  const { client } = await startArgoCD(403, { code: 7, message: 'permission denied' });
-
-  await assert.rejects(client.getAppProjectSyncWindows('default'), /HTTP 403 - permission denied/);
-  await assert.rejects(client.getApplicationSyncWindows('guestbook'), /HTTP 403/);
-});
-
-test('sync window reads reject a null body on 200 instead of throwing a TypeError', async () => {
-  const { client } = await startArgoCD(200, null);
-
-  await assert.rejects(client.getAppProjectSyncWindows('default'), /unexpected empty response/);
-  await assert.rejects(client.getApplicationSyncWindows('guestbook'), /unexpected empty response/);
+  assert.deepEqual(result.items, []);
+  assert.equal(result.metadata.totalItems, 0);
 });

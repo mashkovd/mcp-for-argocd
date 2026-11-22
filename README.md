@@ -45,7 +45,7 @@ The server provides the following ArgoCD management tools:
 - `get_appproject_sync_windows`: Get the sync windows currently in effect for an AppProject
 
 ### Application Management
-- `list_applications`: List and filter all applications
+- `list_applications`: List applications as a compact summary (name, project, source, destination, sync and health), filtered by name substring, with `limit`/`offset` pagination
 - `get_application`: Get detailed information about a specific application
 - `get_application_sync_windows`: Get the sync windows assigned to and active for an application, and whether a sync is allowed now (`canSync`)
 - `get_application_events`: Get events for a specific application
