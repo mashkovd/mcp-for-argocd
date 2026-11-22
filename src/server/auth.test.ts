@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import { generateKeyPair, SignJWT, JWTVerifyGetKey } from 'jose';
 import { Request, Response } from 'express';
 import { AuthConfig, authConfigFromEnv, createAuthMiddleware } from './auth.js';
@@ -16,7 +16,10 @@ const config: AuthConfig = {
 };
 
 // One signing key pair for the suite; `getKey` stands in for the remote JWKS.
-const keys = await generateKeyPair('RS256');
+let keys: Awaited<ReturnType<typeof generateKeyPair>>;
+before(async () => {
+  keys = await generateKeyPair('RS256');
+});
 const getKey: JWTVerifyGetKey = async () => keys.publicKey;
 
 const signToken = async (
