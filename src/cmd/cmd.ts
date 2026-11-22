@@ -88,11 +88,21 @@ type ListenerArgv = {
 };
 
 export const httpOptions = <T>(yargs: Argv<T>) =>
-  listenerOptions(yargs).option('stateless', {
-    type: 'boolean',
-    default: envBoolean(process.env.MCP_STATELESS),
-    description: 'Run in stateless mode. Also set by MCP_STATELESS=true.'
-  });
+  listenerOptions(yargs)
+    .option('stateless', {
+      type: 'boolean',
+      default: envBoolean(process.env.MCP_STATELESS),
+      description: 'Run in stateless mode. Also set by MCP_STATELESS=true.'
+    })
+    .option('json-response', {
+      type: 'boolean',
+      default: envBoolean(process.env.MCP_JSON_RESPONSE),
+      description:
+        'Return a single JSON response instead of upgrading to an SSE stream. ' +
+        "Independent of --stateless: some MCP clients treat a stateless server's " +
+        'end-of-stream as a connection failure when no SSE session/event ID is present. ' +
+        'Also set by MCP_JSON_RESPONSE=true.'
+    });
 
 const transportOptions = (argv: ListenerArgv): TransportOptions => ({
   port: argv.port,
@@ -129,7 +139,13 @@ export const cmd = () => {
   );
 
   exe.command('http', 'Start ArgoCD MCP server using Http Stream.', httpOptions, (argv) =>
-    start(() => connectHttpTransport({ ...transportOptions(argv), stateless: argv.stateless }))
+    start(() =>
+      connectHttpTransport({
+        ...transportOptions(argv),
+        stateless: argv.stateless,
+        jsonResponse: argv.jsonResponse
+      })
+    )
   );
 
   // Without strict(), a misspelled security flag ('--allowed-host') is silently
