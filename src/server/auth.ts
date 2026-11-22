@@ -26,7 +26,19 @@ export const authConfigFromEnv = (env: NodeJS.ProcessEnv = process.env): AuthCon
   const audience = env.MCP_AUTH_AUDIENCE?.trim() || '';
   const header = (env.MCP_AUTH_TOKEN_HEADER?.trim() || 'authorization').toLowerCase();
 
-  if (!jwksUrl && !issuer && !audience) return null;
+  // MCP_AUTH_REQUIRED=true says this deployment must verify a JWT. Without it a
+  // typo in all three variable names would read as "no auth configured" and the
+  // server would start unauthenticated; with it, that is a startup error.
+  const required = env.MCP_AUTH_REQUIRED?.trim().toLowerCase() === 'true';
+
+  if (!jwksUrl && !issuer && !audience) {
+    if (required) {
+      throw new Error(
+        'MCP_AUTH_REQUIRED=true but MCP_AUTH_JWKS_URL, MCP_AUTH_ISSUER and MCP_AUTH_AUDIENCE are not set'
+      );
+    }
+    return null;
+  }
 
   const missing = [
     ['MCP_AUTH_JWKS_URL', jwksUrl],
@@ -37,6 +49,17 @@ export const authConfigFromEnv = (env: NodeJS.ProcessEnv = process.env): AuthCon
     .map(([name]) => name);
   if (missing.length > 0) {
     throw new Error(`Incomplete inbound auth config: missing ${missing.join(', ')}`);
+  }
+
+  // Signing keys fetched over plain HTTP could be swapped by anyone on the path.
+  let jwks: URL;
+  try {
+    jwks = new URL(jwksUrl);
+  } catch {
+    throw new Error('MCP_AUTH_JWKS_URL must be a valid URL');
+  }
+  if (jwks.protocol !== 'https:') {
+    throw new Error('MCP_AUTH_JWKS_URL must be an https:// URL');
   }
 
   return { jwksUrl, issuer, audience, header };

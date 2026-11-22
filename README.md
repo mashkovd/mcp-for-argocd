@@ -352,10 +352,13 @@ Enable it by setting all of:
 | `MCP_AUTH_ISSUER` | Expected `iss` claim, e.g. `https://<team>.cloudflareaccess.com` |
 | `MCP_AUTH_AUDIENCE` | Expected `aud` claim (the proxy application's audience tag) |
 | `MCP_AUTH_TOKEN_HEADER` | Optional. Header carrying the JWT. Defaults to `authorization` (Bearer scheme); Cloudflare Access sends `cf-access-jwt-assertion` |
+| `MCP_AUTH_REQUIRED` | Optional. Set to `true` to make the server refuse to start unless the three variables above are set, so a typo in their names cannot leave the listener unauthenticated. |
 
 Tokens are verified: signature (RS256 or ES256) against the JWKS, plus the `iss`, `aud` and `exp` claims. `/healthz` stays open for Kubernetes probes.
 
-By default (no `MCP_AUTH_*` variables set), inbound requests are not authenticated. Setting only some of the required variables is a misconfiguration: the server fails at startup instead of silently running unauthenticated.
+JWT verification counts as inbound authentication: a non-loopback bind does not need `--allow-unauthenticated`, and combining it with `MCP_AUTH_TOKEN` or `--allow-unauthenticated` is a startup error. `MCP_AUTH_JWKS_URL` must be an `https://` URL. It runs before Host and Origin validation.
+
+By default (no `MCP_AUTH_*` variables set), inbound requests are not authenticated. Setting only some of the required variables is a misconfiguration: the server fails at startup instead of silently running unauthenticated. Set `MCP_AUTH_REQUIRED=true` to also fail when none of them is set.
 
 ### Stateless Mode
 

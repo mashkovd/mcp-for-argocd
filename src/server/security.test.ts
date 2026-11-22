@@ -651,3 +651,77 @@ test('an allow-listed non-http origin reaches the route', async () => {
     await close();
   }
 });
+
+// --- inbound verifier (JWT behind an identity-aware proxy) -------------------
+
+const verifier: express.RequestHandler = (req, res, next) => {
+  if (req.headers['x-verified'] === 'yes') next();
+  else res.status(401).send('Unauthorized');
+};
+
+test('an inbound verifier counts as inbound authentication on an exposed bind', () => {
+  const security = resolveListenerSecurity({
+    bindAddress: '0.0.0.0',
+    port: PORT,
+    authenticate: verifier
+  });
+
+  assert.equal(security.authenticate, verifier);
+});
+
+test('an inbound verifier cannot be combined with a static token or --allow-unauthenticated', () => {
+  assert.throws(
+    () =>
+      resolveListenerSecurity({
+        bindAddress: '0.0.0.0',
+        port: PORT,
+        authenticate: verifier,
+        authToken: 'secret'
+      }),
+    /cannot be combined/
+  );
+  assert.throws(
+    () =>
+      resolveListenerSecurity({
+        bindAddress: '0.0.0.0',
+        port: PORT,
+        authenticate: verifier,
+        allowUnauthenticated: true
+      }),
+    /cannot be combined/
+  );
+});
+
+test('the listener runs the inbound verifier on every route it guards', async () => {
+  const app = express();
+  applyListenerSecurity(app, resolveListenerSecurity({ port: PORT, authenticate: verifier }));
+  app.get('/probe', (_req, res) => {
+    res.send('ok');
+  });
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const get = (headers: Record<string, string>) =>
+    new Promise<number>((resolve, reject) => {
+      http
+        .get(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/probe',
+            headers: { host: `127.0.0.1:${PORT}`, ...headers }
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode ?? 0));
+          }
+        )
+        .on('error', reject);
+    });
+  try {
+    assert.equal(await get({}), 401);
+    assert.equal(await get({ 'x-verified': 'yes' }), 200);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

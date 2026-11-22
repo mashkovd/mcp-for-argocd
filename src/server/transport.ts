@@ -46,14 +46,17 @@ export const connectStdioTransport = () => {
 
 export type TransportOptions = ListenerSecurityOptions;
 
-// Enforce inbound JWT auth on MCP routes when configured (MCP_AUTH_JWKS_URL &
-// co., for deployments behind an identity-aware proxy). Complements the
-// listener security middleware. /healthz stays open for Kubernetes probes.
-const applyInboundAuth = (app: express.Express, paths: string[]) => {
+// Turn MCP_AUTH_JWKS_URL & co. (deployments behind an identity-aware proxy such as
+// Cloudflare Access) into the listener's verifier. It goes through
+// resolveListenerSecurity, so it counts as inbound authentication there, cannot be
+// combined with MCP_AUTH_TOKEN or --allow-unauthenticated, and runs before Host and
+// Origin validation. /healthz is registered before the security middleware and stays
+// open for Kubernetes probes.
+const withInboundAuth = (options: TransportOptions): TransportOptions => {
   const authConfig = authConfigFromEnv();
-  if (!authConfig) return;
-  app.use(paths, createAuthMiddleware(authConfig));
-  logger.info(`Inbound JWT auth enabled on ${paths.join(', ')} (header: ${authConfig.header})`);
+  if (!authConfig) return options;
+  logger.info(`Inbound JWT auth enabled (header: ${authConfig.header})`);
+  return { ...options, authenticate: options.authenticate ?? createAuthMiddleware(authConfig) };
 };
 
 // Liveness probe, registered before the security middleware: a kubelet probe
@@ -140,12 +143,11 @@ const resolveCredentials = (
 };
 
 export const connectSSETransport = (options: TransportOptions) => {
-  const security = resolveListenerSecurity(options);
+  const security = resolveListenerSecurity(withInboundAuth(options));
   const { port } = options;
   const app = express();
   registerHealthz(app);
   applyListenerSecurity(app, security);
-  applyInboundAuth(app, ['/sse', '/messages']);
   const transports: { [sessionId: string]: SSEServerTransport } = {};
 
   app.get('/sse', async (req, res) => {
@@ -185,12 +187,11 @@ export const connectSSETransport = (options: TransportOptions) => {
 export const connectHttpTransport = (
   options: TransportOptions & { stateless?: boolean; jsonResponse?: boolean }
 ) => {
-  const security = resolveListenerSecurity(options);
+  const security = resolveListenerSecurity(withInboundAuth(options));
   const { port, stateless = false, jsonResponse = false } = options;
   const app = express();
   registerHealthz(app);
   applyListenerSecurity(app, security);
-  applyInboundAuth(app, ['/mcp']);
   // After the security and auth middleware, so malformed JSON returns 401/403
   // rather than the body parser's 400, which would tell a caller it passed the
   // credential check.

@@ -180,3 +180,31 @@ test('authConfigFromEnv fails closed on partial config', () => {
     /missing MCP_AUTH_ISSUER, MCP_AUTH_AUDIENCE/
   );
 });
+
+test('authConfigFromEnv fails when MCP_AUTH_REQUIRED=true and no auth var is set', () => {
+  // A typo in all three names must not read as "no auth configured".
+  assert.throws(() => authConfigFromEnv({ MCP_AUTH_REQUIRED: 'true' }), /MCP_AUTH_REQUIRED=true/);
+  assert.equal(authConfigFromEnv({ MCP_AUTH_REQUIRED: 'false' }), null);
+});
+
+test('authConfigFromEnv accepts a full config when MCP_AUTH_REQUIRED=true', () => {
+  const parsed = authConfigFromEnv({
+    MCP_AUTH_REQUIRED: 'true',
+    MCP_AUTH_JWKS_URL: config.jwksUrl,
+    MCP_AUTH_ISSUER: config.issuer,
+    MCP_AUTH_AUDIENCE: config.audience
+  });
+  assert.equal(parsed?.audience, config.audience);
+});
+
+test('authConfigFromEnv rejects a JWKS URL that is not https', () => {
+  assert.throws(
+    () =>
+      authConfigFromEnv({
+        MCP_AUTH_JWKS_URL: 'http://team.cloudflareaccess.com/cdn-cgi/access/certs',
+        MCP_AUTH_ISSUER: config.issuer,
+        MCP_AUTH_AUDIENCE: config.audience
+      }),
+    /https/
+  );
+});

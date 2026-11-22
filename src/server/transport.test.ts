@@ -378,3 +378,56 @@ test('an absent or empty Host header is rejected, not treated as an allowed name
     await close();
   }
 });
+
+// Inbound JWT verification (MCP_AUTH_*) is wired through the listener security, so
+// it guards the MCP route, leaves /healthz open, and cannot be stacked with a token.
+const withJwtEnv = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const keys = ['MCP_AUTH_JWKS_URL', 'MCP_AUTH_ISSUER', 'MCP_AUTH_AUDIENCE'] as const;
+  const previous = keys.map((key) => process.env[key]);
+  process.env.MCP_AUTH_JWKS_URL = 'https://team.cloudflareaccess.com/cdn-cgi/access/certs';
+  process.env.MCP_AUTH_ISSUER = 'https://team.cloudflareaccess.com';
+  process.env.MCP_AUTH_AUDIENCE = 'aud-tag';
+  try {
+    return await fn();
+  } finally {
+    keys.forEach((key, i) => restoreEnv(key, previous[i]));
+  }
+};
+
+test('with MCP_AUTH_* set, the http transport requires a JWT on /mcp and keeps /healthz open', async () => {
+  await withJwtEnv(async () => {
+    const port = await freePort();
+    const server = connectHttpTransport({ port });
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      assert.equal((await request(port, { body: initialize })).status, 401);
+      assert.equal((await request(port, { path: '/healthz', method: 'GET' })).status, 200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test('with MCP_AUTH_* set, the sse transport requires a JWT', async () => {
+  await withJwtEnv(async () => {
+    const port = await freePort();
+    const server = connectSSETransport({ port });
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      assert.equal((await request(port, { path: '/sse', method: 'GET' })).status, 401);
+      assert.equal((await request(port, { path: '/messages', body: '{}' })).status, 401);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test('MCP_AUTH_* together with MCP_AUTH_TOKEN is a startup error, not a silent choice', async () => {
+  await withJwtEnv(async () => {
+    const port = await freePort();
+    assert.throws(
+      () => connectHttpTransport({ port, authToken: INBOUND_TOKEN }),
+      /cannot be combined/
+    );
+  });
+});
