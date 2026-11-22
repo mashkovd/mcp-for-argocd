@@ -23,13 +23,21 @@ import {
 // construction.
 const tokenRegistry = tokenRegistryFromEnv();
 const extraHeaders = extraHeadersFromEnv();
+// Extra headers are operator secrets scoped to the operator's own ARGOCD_BASE_URL.
+// With no base URL to scope them to they would never be sent, so refuse to start
+// rather than run with a silently inert setting.
+const extraHeadersBaseUrl = process.env.ARGOCD_BASE_URL || undefined;
+if (Object.keys(extraHeaders).length > 0 && !extraHeadersBaseUrl) {
+  throw new Error('ARGOCD_EXTRA_HEADERS requires ARGOCD_BASE_URL: the headers are sent only there');
+}
 
 export const connectStdioTransport = () => {
   const server = createServer({
     argocdBaseUrl: process.env.ARGOCD_BASE_URL || '',
     argocdApiToken: process.env.ARGOCD_API_TOKEN || '',
     tokenRegistry,
-    extraHeaders
+    extraHeaders,
+    extraHeadersBaseUrl
   });
 
   logger.info('Connecting to stdio transport');
@@ -146,7 +154,12 @@ export const connectSSETransport = (options: TransportOptions) => {
     // closed, one per connection.
     const credentials = resolveCredentials(req, res);
     if (!credentials) return;
-    const server = createServer({ ...credentials, tokenRegistry, extraHeaders });
+    const server = createServer({
+      ...credentials,
+      tokenRegistry,
+      extraHeaders,
+      extraHeadersBaseUrl
+    });
 
     const transport = new SSEServerTransport('/messages', res);
     transports[transport.sessionId] = transport;
@@ -213,7 +226,12 @@ export const connectHttpTransport = (
         };
       }
 
-      const server = createServer({ ...credentials, tokenRegistry, extraHeaders });
+      const server = createServer({
+        ...credentials,
+        tokenRegistry,
+        extraHeaders,
+        extraHeadersBaseUrl
+      });
       await server.connect(transport);
     } else {
       const errorMsg = sessionIdFromHeader

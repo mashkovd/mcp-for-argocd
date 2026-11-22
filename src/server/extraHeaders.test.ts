@@ -8,7 +8,8 @@ test('extra headers are attached to Argo CD HTTP requests', () => {
     argocdBaseUrl: 'https://argocd.example.com',
     argocdApiToken: 'token',
     tokenRegistry: new TokenRegistry(),
-    extraHeaders: { Cookie: 'x-og-token=ccccccxxxxx' }
+    extraHeaders: { Cookie: 'x-og-token=ccccccxxxxx' },
+    extraHeadersBaseUrl: 'https://argocd.example.com'
   });
 
   const argoClient = (

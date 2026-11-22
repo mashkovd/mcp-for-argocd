@@ -17,9 +17,16 @@ type ServerInfo = {
   // Optional registry mapping additional ArgoCD base URLs to their tokens. When
   // omitted, it is loaded from the ARGOCD_TOKEN_REGISTRY_PATH env var.
   tokenRegistry?: TokenRegistry;
-  // Optional extra HTTP headers for every Argo CD API request (from
-  // ARGOCD_EXTRA_HEADERS). Authorization and Content-Type cannot be overridden.
+  // Optional extra HTTP headers for Argo CD API requests (from ARGOCD_EXTRA_HEADERS).
+  // Authorization and Content-Type cannot be overridden. They are operator secrets
+  // (a Cloudflare Access service token, a cookie), so they are sent ONLY to
+  // extraHeadersBaseUrl and never to a base URL a caller chose.
   extraHeaders?: Record<string, string>;
+  // The operator-configured base URL (ARGOCD_BASE_URL) the extra headers belong to.
+  // Without it no extra header is sent anywhere. A caller can pick the session base
+  // URL through the x-argocd-base-url header or a tool argument, so "the default
+  // URL" is not a trusted destination for operator secrets.
+  extraHeadersBaseUrl?: string;
 };
 
 // Per-call argument that any tool may accept to target a specific ArgoCD
@@ -49,6 +56,7 @@ export class Server extends McpServer {
   private tokenRegistry: TokenRegistry;
   private argocdClient: ArgoCDClient;
   private extraHeaders: Record<string, string>;
+  private extraHeadersBaseUrl: string | undefined;
   // Cache per-credential clients to avoid rebuilding the HttpClient on every
   // call. Keyed by baseUrl + token, since the same base URL may resolve to
   // different tokens (request token vs. registry token vs. default).
@@ -63,10 +71,11 @@ export class Server extends McpServer {
     this.defaultApiToken = serverInfo.argocdApiToken;
     this.tokenRegistry = serverInfo.tokenRegistry ?? tokenRegistryFromEnv();
     this.extraHeaders = serverInfo.extraHeaders ?? {};
+    this.extraHeadersBaseUrl = serverInfo.extraHeadersBaseUrl;
     this.argocdClient = new ArgoCDClient(
       serverInfo.argocdBaseUrl,
       serverInfo.argocdApiToken,
-      this.extraHeaders
+      this.extraHeadersFor(serverInfo.argocdBaseUrl)
     );
 
     const isReadOnly =
@@ -518,10 +527,18 @@ export class Server extends McpServer {
     const cacheKey = `${baseUrl} ${apiToken}`;
     let client = this.clientCache.get(cacheKey);
     if (!client) {
-      client = new ArgoCDClient(baseUrl, apiToken, this.extraHeaders);
+      client = new ArgoCDClient(baseUrl, apiToken, this.extraHeadersFor(baseUrl));
       this.clientCache.set(cacheKey, client);
     }
     return client;
+  }
+
+  // Operator headers go only to the operator-configured base URL (see ServerInfo).
+  private extraHeadersFor(baseUrl: string): Record<string, string> {
+    if (!this.extraHeadersBaseUrl || !baseUrl) return {};
+    return TokenRegistry.normalize(baseUrl) === TokenRegistry.normalize(this.extraHeadersBaseUrl)
+      ? this.extraHeaders
+      : {};
   }
 
   private addJsonOutputTool<Args extends ZodRawShape, T>(

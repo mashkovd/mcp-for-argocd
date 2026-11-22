@@ -156,7 +156,7 @@ This disables TLS certificate validation for Node.js when connecting to Argo CD 
 
 ### Extra HTTP Headers
 
-Some Argo CD deployments sit behind an ingress, SSO gateway, or corporate proxy that requires additional HTTP headers (for example, a session cookie). Set `ARGOCD_EXTRA_HEADERS` to a JSON object of header names and string values; the server attaches them to **every request it makes to Argo CD**:
+Some Argo CD deployments sit behind an ingress, SSO gateway, or corporate proxy that requires additional HTTP headers (for example, a session cookie). Set `ARGOCD_EXTRA_HEADERS` to a JSON object of header names and string values; the server attaches them to every request it makes to **the Argo CD at `ARGOCD_BASE_URL`**:
 
 ```
 "ARGOCD_EXTRA_HEADERS": "{\"Cookie\": \"x-og-token=<value>\"}"
@@ -164,7 +164,9 @@ Some Argo CD deployments sit behind an ingress, SSO gateway, or corporate proxy 
 
 This variable is **optional**. When unset or empty, no extra headers are sent and behavior is unchanged.
 
-`Authorization` and `Content-Type` are always set by the server and cannot be overridden by `ARGOCD_EXTRA_HEADERS`. If the variable is set but contains invalid JSON or non-string values, the server fails at startup.
+`Authorization` and `Content-Type` are always set by the server and cannot be overridden by `ARGOCD_EXTRA_HEADERS`. If the variable is set but contains invalid JSON or non-string values, or `ARGOCD_BASE_URL` is not set, the server fails at startup.
+
+The headers are operator secrets, so they are sent **only** to `ARGOCD_BASE_URL`. They are not sent to a base URL a caller supplies through the `x-argocd-base-url` header or the `argocdBaseUrl` tool argument, including instances registered in `ARGOCD_TOKEN_REGISTRY_PATH`.
 
 Like other Argo CD credentials, extra headers are read from the environment at server startup — not from MCP tool-call arguments — so secrets stay out of prompts and tool-call logs.
 
@@ -446,7 +448,7 @@ To configure credentials, export the relevant environment variable on the comman
 | `ARGOCD_BASE_URL` | Default ArgoCD instance URL used when a call doesn't override it. |
 | `ARGOCD_API_TOKEN` | Static API token for the default base URL. |
 | `ARGOCD_TOKEN_REGISTRY_PATH` | Path to a JSON [token registry](#token-registry--per-base-url-tokens-multi-instance) mapping base URLs to tokens (for targeting multiple instances). |
-| `ARGOCD_EXTRA_HEADERS` | JSON object of [extra HTTP headers](#extra-http-headers) sent on every request to Argo CD (e.g. gateway cookies). |
+| `ARGOCD_EXTRA_HEADERS` | JSON object of [extra HTTP headers](#extra-http-headers) sent on every request to the Argo CD at `ARGOCD_BASE_URL` only (e.g. gateway cookies). |
 
 These are all outbound credentials. For who may reach the listener, see [Network Exposure](#network-exposure).
 

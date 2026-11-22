@@ -306,3 +306,108 @@ test('every tool that changes ArgoCD state is annotated as not read-only', () =>
     if (previous !== undefined) process.env.MCP_READ_ONLY = previous;
   }
 });
+
+// ARGOCD_EXTRA_HEADERS carry operator secrets (a Cloudflare Access service token, a
+// cookie). The session base URL can be chosen by a caller (x-argocd-base-url) and a
+// tool argument can pick any registered URL, so the headers must follow the
+// operator-configured URL only.
+const startRecordingApi = async (): Promise<{
+  url: string;
+  headers: Record<string, string | string[] | undefined>[];
+  close: () => Promise<void>;
+}> => {
+  const headers: Record<string, string | string[] | undefined>[] = [];
+  const api = createHttpServer((req, res) => {
+    headers.push(req.headers);
+    res.setHeader('Content-Type', 'application/json');
+    res.end('{}');
+  });
+  api.listen(0, '127.0.0.1');
+  await once(api, 'listening');
+  const { port } = api.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    headers,
+    close: () => new Promise<void>((resolve) => api.close(() => resolve()))
+  };
+};
+
+const SECRET_HEADERS = { 'CF-Access-Client-Secret': 'operator-secret' };
+
+test('extra headers are sent to the operator base URL', async (t) => {
+  const operator = await startRecordingApi();
+  t.after(operator.close);
+  const server = createServer({
+    argocdBaseUrl: operator.url,
+    argocdApiToken: DEFAULT_TOKEN,
+    tokenRegistry: new TokenRegistry(),
+    extraHeaders: SECRET_HEADERS,
+    extraHeadersBaseUrl: operator.url
+  });
+
+  const result = await callTool(server, 'get_application', { applicationName: 'guestbook' });
+
+  assert.notEqual(result.isError, true, textOf(result));
+  assert.equal(operator.headers[0]['cf-access-client-secret'], 'operator-secret');
+});
+
+test('extra headers are not sent to a caller-chosen session base URL', async (t) => {
+  const operator = await startRecordingApi();
+  const attacker = await startRecordingApi();
+  t.after(operator.close);
+  t.after(attacker.close);
+  // The caller picked the session base URL (x-argocd-base-url) and token.
+  const server = createServer({
+    argocdBaseUrl: attacker.url,
+    argocdApiToken: 'caller-token',
+    tokenRegistry: new TokenRegistry(),
+    extraHeaders: SECRET_HEADERS,
+    extraHeadersBaseUrl: operator.url
+  });
+
+  const result = await callTool(server, 'get_application', { applicationName: 'guestbook' });
+
+  assert.notEqual(result.isError, true, textOf(result));
+  assert.equal(attacker.headers.length, 1, 'the request itself still reaches the caller URL');
+  assert.equal(attacker.headers[0]['cf-access-client-secret'], undefined);
+  assert.equal(operator.headers.length, 0);
+});
+
+test('extra headers are not sent to another instance chosen per call', async (t) => {
+  const operator = await startRecordingApi();
+  const other = await startRecordingApi();
+  t.after(operator.close);
+  t.after(other.close);
+  const server = createServer({
+    argocdBaseUrl: operator.url,
+    argocdApiToken: DEFAULT_TOKEN,
+    tokenRegistry: new TokenRegistry([{ baseUrl: other.url, token: 'registered-token' }]),
+    extraHeaders: SECRET_HEADERS,
+    extraHeadersBaseUrl: operator.url
+  });
+
+  const result = await callTool(server, 'get_application', {
+    applicationName: 'guestbook',
+    argocdBaseUrl: other.url
+  });
+
+  assert.notEqual(result.isError, true, textOf(result));
+  assert.equal(other.headers.length, 1);
+  assert.equal(other.headers[0]['cf-access-client-secret'], undefined);
+});
+
+test('extra headers are never sent when no operator base URL is configured', async (t) => {
+  const api = await startRecordingApi();
+  t.after(api.close);
+  const server = createServer({
+    argocdBaseUrl: api.url,
+    argocdApiToken: DEFAULT_TOKEN,
+    tokenRegistry: new TokenRegistry(),
+    extraHeaders: SECRET_HEADERS
+  });
+
+  const result = await callTool(server, 'get_application', { applicationName: 'guestbook' });
+
+  assert.notEqual(result.isError, true, textOf(result));
+  assert.equal(api.headers[0]['cf-access-client-secret'], undefined);
+});
