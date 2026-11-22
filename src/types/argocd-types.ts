@@ -19,3 +19,4 @@ export type V1alpha1AppProject = ArgoCD.V1alpha1AppProject;
 export type V1alpha1SyncWindow = ArgoCD.V1alpha1SyncWindow;
 export type ApplicationSyncWindowsResponse = ArgoCD.ApplicationApplicationSyncWindowsResponse;
 export type ProjectSyncWindowsResponse = ArgoCD.ProjectSyncWindowsResponse;
+export type V1alpha1HelmParameter = ArgoCD.V1alpha1HelmParameter;
