@@ -411,3 +411,31 @@ test('extra headers are never sent when no operator base URL is configured', asy
   assert.notEqual(result.isError, true, textOf(result));
   assert.equal(api.headers[0]['cf-access-client-secret'], undefined);
 });
+
+test('MCP_READ_ONLY=true registers only tools annotated as read-only', () => {
+  const previous = process.env.MCP_READ_ONLY;
+  process.env.MCP_READ_ONLY = 'true';
+  try {
+    const server = createServer({
+      argocdBaseUrl: DEFAULT_BASE_URL,
+      argocdApiToken: DEFAULT_TOKEN,
+      tokenRegistry: new TokenRegistry()
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean } }>;
+      }
+    )._registeredTools;
+    const names = Object.keys(registered);
+    assert.ok(names.length > 0);
+    // A tool added later outside the read-only gate would be exposed to a deployment
+    // that relies on this mode; the annotation default is true, so a write tool that
+    // is registered ungated and unannotated is caught by the first test, one that is
+    // annotated is caught here.
+    const writable = names.filter((name) => registered[name].annotations?.readOnlyHint !== true);
+    assert.deepEqual(writable, []);
+  } finally {
+    if (previous === undefined) delete process.env.MCP_READ_ONLY;
+    else process.env.MCP_READ_ONLY = previous;
+  }
+});
