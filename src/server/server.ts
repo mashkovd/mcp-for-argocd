@@ -303,14 +303,16 @@ export class Server extends McpServer {
         'create_application creates a new ArgoCD application in the specified namespace. The application.metadata.namespace field determines where the Application resource will be created (e.g., "argocd", "argocd-apps", or any custom namespace).',
         { application: ApplicationSchema },
         async ({ application }, client) =>
-          await client.createApplication(application as V1alpha1Application)
+          await client.createApplication(application as V1alpha1Application),
+        { readOnlyHint: false, destructiveHint: false }
       );
       this.addJsonOutputTool(
         'update_application',
         'update_application updates application',
         { applicationName: z.string(), application: ApplicationSchema },
         async ({ applicationName, application }, client) =>
-          await client.updateApplication(applicationName, application as V1alpha1Application)
+          await client.updateApplication(applicationName, application as V1alpha1Application),
+        { readOnlyHint: false, destructiveHint: true }
       );
       this.addJsonOutputTool(
         'delete_application',
@@ -339,7 +341,8 @@ export class Server extends McpServer {
             applicationName,
             Object.keys(options).length > 0 ? options : undefined
           );
-        }
+        },
+        { readOnlyHint: false, destructiveHint: true }
       );
       this.addJsonOutputTool(
         'sync_application',
@@ -383,7 +386,8 @@ export class Server extends McpServer {
             applicationName,
             Object.keys(options).length > 0 ? options : undefined
           );
-        }
+        },
+        { readOnlyHint: false, destructiveHint: true }
       );
       this.addJsonOutputTool(
         'run_resource_action',
@@ -400,7 +404,8 @@ export class Server extends McpServer {
             applicationNamespace,
             resourceRef as V1alpha1ResourceResult,
             action
-          )
+          ),
+        { readOnlyHint: false, destructiveHint: true }
       );
     }
   }
@@ -475,10 +480,14 @@ export class Server extends McpServer {
       cbArgs: Parameters<ToolCallback<Args>>[0],
       client: ArgoCDClient,
       extra: Parameters<ToolCallback<Args>>[1]
-    ) => T
+    ) => T,
+    annotations: { readOnlyHint?: boolean; destructiveHint?: boolean } = {
+      readOnlyHint: true,
+      destructiveHint: false
+    }
   ) {
     const mergedSchema = { ...paramsSchema, ...argoCDArgsSchema } as ZodRawShape;
-    this.tool(name, description, mergedSchema, async (...args) => {
+    this.tool(name, description, mergedSchema, annotations, async (...args) => {
       try {
         const [allArgs, extra] = args as [
           Parameters<ToolCallback<Args>>[0] & ArgoCDArgs,
