@@ -340,7 +340,8 @@ export class Server extends McpServer {
             .min(1)
         },
         async ({ applicationName, applicationNamespace, parameters }, client) =>
-          await client.setHelmParameters(applicationName, parameters, applicationNamespace)
+          await client.setHelmParameters(applicationName, parameters, applicationNamespace),
+        { readOnlyHint: false, destructiveHint: true }
       );
       this.addJsonOutputTool(
         'delete_application',

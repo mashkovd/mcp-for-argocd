@@ -273,3 +273,36 @@ test('sync window tools are registered, including in read-only mode', () => {
     else process.env.MCP_READ_ONLY = previous;
   }
 });
+
+test('every tool that changes ArgoCD state is annotated as not read-only', () => {
+  const previous = process.env.MCP_READ_ONLY;
+  delete process.env.MCP_READ_ONLY;
+  try {
+    const server = createServer({
+      argocdBaseUrl: DEFAULT_BASE_URL,
+      argocdApiToken: DEFAULT_TOKEN,
+      tokenRegistry: new TokenRegistry()
+    });
+    const registered = (
+      server as unknown as {
+        _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean } }>;
+      }
+    )._registeredTools;
+    // addJsonOutputTool defaults to readOnlyHint: true, so a new write tool that forgets
+    // its annotations would be advertised to clients as read-only.
+    for (const name of [
+      'create_application',
+      'update_application',
+      'delete_application',
+      'sync_application',
+      'run_resource_action',
+      'set_helm_parameters'
+    ]) {
+      assert.ok(registered[name], `${name} is registered`);
+      assert.equal(registered[name].annotations?.readOnlyHint, false, name);
+    }
+    assert.equal(registered['get_application_sync_windows'].annotations?.readOnlyHint, true);
+  } finally {
+    if (previous !== undefined) process.env.MCP_READ_ONLY = previous;
+  }
+});
