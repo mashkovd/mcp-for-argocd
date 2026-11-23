@@ -431,3 +431,86 @@ test('MCP_AUTH_* together with MCP_AUTH_TOKEN is a startup error, not a silent c
     );
   });
 });
+
+// Whitespace around the API token (typically a trailing newline from a secret
+// store) must not reach the Authorization header, where fetch would reject it.
+// Drives a stateless tools/call through the real transport against a fake ArgoCD
+// and records the Authorization header it receives.
+const callToolViaTransport = async (
+  tokenEnv: string | undefined,
+  tokenHeader: string | undefined
+): Promise<{ status: number; body: string; authorization: string[] }> => {
+  const authorization: string[] = [];
+  const api = http.createServer((req, res) => {
+    authorization.push(String(req.headers.authorization));
+    res.setHeader('Content-Type', 'application/json');
+    res.end('{"items":[]}');
+  });
+  await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve));
+  const apiPort = (api.address() as AddressInfo).port;
+  const port = await freePort();
+  const previousToken = process.env.ARGOCD_API_TOKEN;
+  if (tokenEnv === undefined) delete process.env.ARGOCD_API_TOKEN;
+  else process.env.ARGOCD_API_TOKEN = tokenEnv;
+  const server = connectHttpTransport({
+    port,
+    authToken: INBOUND_TOKEN,
+    stateless: true,
+    jsonResponse: true
+  });
+  await new Promise((resolve) => server.once('listening', resolve));
+  try {
+    const headers: Record<string, string> = {
+      ...authorized(port),
+      accept: 'application/json, text/event-stream',
+      'x-argocd-base-url': `http://127.0.0.1:${apiPort}`
+    };
+    if (tokenHeader !== undefined) headers['x-argocd-api-token'] = tokenHeader;
+    const res = await request(port, {
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'list_applications', arguments: {} }
+      })
+    });
+    return { ...res, authorization };
+  } finally {
+    if (previousToken !== undefined) process.env.ARGOCD_API_TOKEN = previousToken;
+    else delete process.env.ARGOCD_API_TOKEN;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    api.closeAllConnections();
+    await new Promise<void>((resolve) => api.close(() => resolve()));
+  }
+};
+
+test('an env API token with a trailing newline is sent without it', async () => {
+  const res = await callToolViaTransport('abc.def.ghi\n', undefined);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.authorization, ['Bearer abc.def.ghi']);
+});
+
+test('a header API token with surrounding whitespace is sent without it', async () => {
+  const res = await callToolViaTransport(undefined, ' \t abc.def.ghi \t ');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.authorization, ['Bearer abc.def.ghi']);
+});
+
+test('only the ends of the API token are trimmed', async () => {
+  const res = await callToolViaTransport('abc.def.ghi\n', ' abc.d ef.ghi ');
+  assert.deepEqual(res.authorization, ['Bearer abc.d ef.ghi']);
+});
+
+test('a whitespace-only API token is treated as missing', async () => {
+  const res = await callToolViaTransport(' \r\n', ' \t ');
+  assert.equal(res.status, 400);
+  assert.match(res.body, /x-argocd-api-token must be provided/);
+  assert.deepEqual(res.authorization, []);
+});
+
+test('a whitespace-only header token falls back to the env token', async () => {
+  const res = await callToolViaTransport('abc.def.ghi\n', '  ');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.authorization, ['Bearer abc.def.ghi']);
+});

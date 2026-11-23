@@ -31,10 +31,15 @@ if (Object.keys(extraHeaders).length > 0 && !extraHeadersBaseUrl) {
   throw new Error('ARGOCD_EXTRA_HEADERS requires ARGOCD_BASE_URL: the headers are sent only there');
 }
 
+// Secret stores often keep a trailing newline on the value. Left in place it ends
+// up in "Authorization: Bearer <token>\n", which fetch rejects as an invalid header
+// value. Trim the ends only; whitespace-only becomes '' and so counts as missing.
+const cleanToken = (value: string | undefined): string => (value ?? '').trim();
+
 export const connectStdioTransport = () => {
   const server = createServer({
     argocdBaseUrl: process.env.ARGOCD_BASE_URL || '',
-    argocdApiToken: process.env.ARGOCD_API_TOKEN || '',
+    argocdApiToken: cleanToken(process.env.ARGOCD_API_TOKEN),
     tokenRegistry,
     extraHeaders,
     extraHeadersBaseUrl
@@ -129,7 +134,8 @@ const resolveCredentials = (
   const argocdBaseUrl =
     (req.headers['x-argocd-base-url'] as string) || process.env.ARGOCD_BASE_URL || '';
   const argocdApiToken =
-    (req.headers['x-argocd-api-token'] as string) || process.env.ARGOCD_API_TOKEN || '';
+    cleanToken(req.headers['x-argocd-api-token'] as string | undefined) ||
+    cleanToken(process.env.ARGOCD_API_TOKEN);
   if (!argocdApiToken && tokenRegistry.getSize() === 0) {
     res
       .status(400)
