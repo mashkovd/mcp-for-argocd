@@ -1,7 +1,7 @@
 name: Publish image to GHCR
 
 # Publishes the image of this fork to ghcr.io/<owner>/mcp-for-argocd when a version
-# tag is pushed (e.g. 0.9.1-portal.1; tags carry no "v" prefix). The upstream
+# tag is pushed (e.g. 0.9.1-fork.1; tags carry no "v" prefix). The upstream
 # docker.yml pushes to Quay as well and runs on main and releases, which a fork
 # neither has the credentials for nor wants; this one is separate on purpose.
 
@@ -46,6 +46,10 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # An integration build is not a stable release: do not move a floating
+          # "latest" tag onto it. Pin the version tag or the digest instead.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=sha

@@ -1,5 +1,11 @@
 # Argo CD MCP Server
 
+> **Integration fork.** This branch is upstream `main` plus open, not yet merged pull requests
+> and a few small fixes. It does not replace
+> [argoproj-labs/mcp-for-argocd](https://github.com/argoproj-labs/mcp-for-argocd). See
+> [CHANGELOG.md](CHANGELOG.md) for exactly what is included and who wrote it. Image:
+> `ghcr.io/mashkovd/mcp-for-argocd:<version>` (pin the version tag or digest, there is no `latest`).
+
 An implementation of [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [Argo CD](https://argo-cd.readthedocs.io/en/stable/), enabling AI assistants to interact with your Argo CD applications through natural language. This server allows for seamless integration with Visual Studio Code and other MCP clients through stdio and HTTP stream transport protocols.
 
 <a href="https://glama.ai/mcp/servers/@akuity/argocd-mcp">
