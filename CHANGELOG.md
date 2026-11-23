@@ -49,7 +49,7 @@ release engineering changed (naming, changelog, no floating `latest` tag).
 - `ARGOCD_EXTRA_HEADERS` are sent only to the configured Argo CD base URL, never to other
   hosts (follow-up to #125).
 - The Argo CD API token is trimmed of surrounding whitespace, including where the
-  `Authorization` header is built (a trailing newline in a mounted secret breaks auth).
+  `Authorization` header is built; a whitespace-only token counts as missing.
 - Test pinning that `MCP_READ_ONLY=true` registers only read-only tools; auth tests no longer
   use top-level `await`, so `tsc --noEmit` is clean.
 - CI: `ghcr.yml` publishes the image to GHCR on version tags (no `latest`).
