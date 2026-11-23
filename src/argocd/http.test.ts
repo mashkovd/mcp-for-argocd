@@ -181,3 +181,10 @@ test(
     }
   }
 );
+
+test('whitespace around the API token is not sent in the Authorization header', () => {
+  const client = new HttpClient('https://argocd.example.com', ' \tabc.def.ghi\r\n');
+  assert.equal(client.headers.Authorization, 'Bearer abc.def.ghi');
+  const inner = new HttpClient('https://argocd.example.com', 'abc def\n');
+  assert.equal(inner.headers.Authorization, 'Bearer abc def');
+});

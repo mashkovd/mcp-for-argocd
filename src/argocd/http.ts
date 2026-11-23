@@ -16,7 +16,9 @@ export class HttpClient {
 
   constructor(baseUrl: string, apiToken: string, extraHeaders: Record<string, string> = {}) {
     this.baseUrl = baseUrl;
-    this.apiToken = apiToken;
+    // Defence in depth: a stray newline or space around the token must never reach
+    // the Authorization header (e.g. from a registry file or a direct caller).
+    this.apiToken = apiToken.trim();
     this.headers = {
       ...extraHeaders,
       Authorization: `Bearer ${this.apiToken}`,
